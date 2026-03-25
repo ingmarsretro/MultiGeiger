@@ -1,13 +1,19 @@
 // clang-format off
 // upload_speed 921600
-// board heltec_wifi_lora_32_V2
+// board heltec_wifi_lora_32_V2 (Wifi_LorA-32_V2)
+//
+// Wifi_LorA-32_V2 pinout used in this project:
+//   pin4  = SDA (I2C/OLED),  pin15 = SCL (I2C/OLED)
+//   pin2  = GMZ_COUNT,       pin22 = HV_CAP_FUL,  pin23 = HV_FET_OUT
+//   pin0  = Speaker pin1,    pin13 = Speaker pin2
+//   pin39 = sw0, pin38 = sw1, pin37 = sw2, pin36 = sw3
 
 #ifndef _HELTECV2_H
 #define _HELTECV2_H
 
 #include <stdint.h>
 
-// Hardware related definitions for Heltec V2 LoRa-32 Board
+// Hardware related definitions for Heltec V2 LoRa-32 Board (Wifi_LorA-32_V2)
 
 //#define HAS_BME 1 // Enable BME sensors in general
 //#define HAS_BME680 GPIO_NUM_4, GPIO_NUM_15 // SDA, SCL
@@ -23,6 +29,9 @@
 
 //#define BAT_MEASURE_ADC ADC2_GPIO13_CHANNEL  // battery probe GPIO pin
 //#define BAT_VOLTAGE_DIVIDER 4 // voltage divider 220k/100k on board
+// Vext = GPIO21 on Wifi_LorA-32_V2 (OLED/external power, LOW = on). Override board if wrong.
+#undef Vext
+#define Vext 21
 #define EXT_POWER_SW Vext // switches battery power, Vext control 0 = on / 1 = off
 #define EXT_POWER_ON    0
 //#define EXT_POWER_OFF   1

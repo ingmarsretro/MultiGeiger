@@ -6,6 +6,7 @@
 
 void setup_speaker(bool playSound, bool led_tick, bool speaker_tick);
 void tick_enable(bool enable);
+void apply_switches_tick(bool speaker_sw, bool led_sw, bool want_speaker_tick, bool want_led_tick);
 void tick(bool high);
 void alarm();
 

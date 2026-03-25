@@ -8,12 +8,13 @@
 // Inputs for the switches
 static unsigned int PIN_SWI_0, PIN_SWI_1, PIN_SWI_2, PIN_SWI_3;
 
+// Wifi_LorA-32_V2: pin39=sw0, pin38=sw1, pin37=sw2, pin36=sw3
 void setup_switches(bool isLoraBoard) {
   if (isLoraBoard) {
-    PIN_SWI_0 = 36;
-    PIN_SWI_1 = 37;
-    PIN_SWI_2 = 38;
-    PIN_SWI_3 = 39;
+    PIN_SWI_0 = 39;
+    PIN_SWI_1 = 38;
+    PIN_SWI_2 = 37;
+    PIN_SWI_3 = 36;
   } else {
     PIN_SWI_0 = 39;
     PIN_SWI_1 = 38;

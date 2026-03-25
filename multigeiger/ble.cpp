@@ -116,15 +116,14 @@ void setup_ble(char *device_name, bool ble_on) {
   bleCharHRPOS->setValue(txBuffer_HRPOS, 1);
 
   bleServer->getAdvertising()->addServiceUUID(BLE_SERVICE_HEART_RATE);
-  bleServer->getAdvertising()->setScanResponse(true);
-  bleServer->getAdvertising()->setMinPreferred(0x06);
-  bleServer->getAdvertising()->setMinPreferred(0x12);
+  bleServer->getAdvertising()->enableScanResponse(true);
+  bleServer->getAdvertising()->setPreferredParams(0x06, 0x12);
 
   bleService->start();
   bleServer->getAdvertising()->start();
 
   set_status(STATUS_BLE, ST_BLE_CONNECTABLE);
-  log(INFO, "BLE service advertising started, device name: %s, MAC: %s", device_name, BLEDevice::getAddress().toString().c_str());
+  log(INFO, "BLE service advertising started, device name: %s, MAC: %s", device_name, NimBLEDevice::getAddress().toString().c_str());
 }
 
 void disable_ble(void) {

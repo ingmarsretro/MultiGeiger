@@ -1,6 +1,9 @@
 // Web Configuration related code
 // also: OTA updates
 
+#include <Arduino.h>
+#include <WiFi.h>
+
 #include "log.h"
 #include "speaker.h"
 
@@ -8,6 +11,7 @@
 #include "IotWebConfTParameter.h"
 #include <IotWebConfESP32HTTPUpdateServer.h>
 #include "userdefines.h"
+#include "mqtt.h"
 
 // Checkboxes have 'selected' if checked, so we need 9 byte for this string.
 #define CHECKBOX_LEN 9
@@ -20,6 +24,7 @@ bool sendToCommunity = SEND2SENSORCOMMUNITY;
 bool sendToMadavi = SEND2MADAVI;
 bool sendToLora = SEND2LORA;
 bool sendToBle = SEND2BLE;
+bool sendToMqtt = false;
 bool soundLocalAlarm = LOCAL_ALARM_SOUND;
 
 char speakerTick_c[CHECKBOX_LEN];
@@ -31,10 +36,15 @@ char sendToMadavi_c[CHECKBOX_LEN];
 char sendToLora_c[CHECKBOX_LEN];
 char sendToBle_c[CHECKBOX_LEN];
 char soundLocalAlarm_c[CHECKBOX_LEN];
+char sendToMqtt_c[CHECKBOX_LEN];
 
 char appeui[17] = "";
 char deveui[17] = "";
 char appkey[IOTWEBCONF_WORD_LEN] = "";
+#define MQTT_STR_LEN 64
+char mqttBroker[MQTT_STR_LEN] = "";
+char mqttPort[6] = "1883";
+char mqttTopic[MQTT_STR_LEN] = "multigeiger/data";
 static bool isLoraBoard;
 
 float localAlarmThreshold = LOCAL_ALARM_THRESHOLD;
@@ -50,6 +60,12 @@ iotwebconf::ParameterGroup grpTransmission = iotwebconf::ParameterGroup("transmi
 iotwebconf::CheckboxParameter sendToCommunityParam = iotwebconf::CheckboxParameter("Send to sensor.community", "send2Community", sendToCommunity_c, CHECKBOX_LEN, sendToCommunity);
 iotwebconf::CheckboxParameter sendToMadaviParam = iotwebconf::CheckboxParameter("Send to madavi.de", "send2Madavi", sendToMadavi_c, CHECKBOX_LEN, sendToMadavi);
 iotwebconf::CheckboxParameter sendToBleParam = iotwebconf::CheckboxParameter("Send to BLE (Reboot required!)", "send2ble", sendToBle_c, CHECKBOX_LEN, sendToBle);
+iotwebconf::CheckboxParameter sendToMqttParam = iotwebconf::CheckboxParameter("Send to MQTT", "send2Mqtt", sendToMqtt_c, CHECKBOX_LEN, sendToMqtt);
+
+iotwebconf::ParameterGroup grpMqtt = iotwebconf::ParameterGroup("mqtt", "MQTT Settings");
+iotwebconf::TextParameter mqttBrokerParam = iotwebconf::TextParameter("Broker host", "mqttBroker", mqttBroker, MQTT_STR_LEN);
+iotwebconf::TextParameter mqttPortParam = iotwebconf::TextParameter("Broker port", "mqttPort", mqttPort, 6);
+iotwebconf::TextParameter mqttTopicParam = iotwebconf::TextParameter("Topic", "mqttTopic", mqttTopic, MQTT_STR_LEN);
 
 iotwebconf::ParameterGroup grpLoRa = iotwebconf::ParameterGroup("lora", "LoRa Settings");
 iotwebconf::CheckboxParameter sendToLoraParam = iotwebconf::CheckboxParameter("Send to LoRa (=>TTN)", "send2lora", sendToLora_c, CHECKBOX_LEN, sendToLora);
@@ -75,7 +91,7 @@ iotwebconf::IntTParameter<int16_t> localAlarmFactorParam =
 // Appending new variables does not require a new version number here.
 // If this value is changed, ALL configuration variables must be re-entered,
 // including the WiFi credentials.
-#define CONFIG_VERSION "015"
+#define CONFIG_VERSION "016"
 
 DNSServer dnsServer;
 WebServer server(80);
@@ -88,9 +104,33 @@ const char *theName = buildSSID();
 char ssid[IOTWEBCONF_WORD_LEN];  // LEN == 33 (2020-01-13)
 
 // -- Initial password to connect to the Thing, when it creates an own Access Point.
-const char wifiInitialApPassword[] = "ESP32Geiger";
+const char wifiInitialApPassword[] = "12345678";
 
 IotWebConf iotWebConf(theName, &dnsServer, &server, wifiInitialApPassword, CONFIG_VERSION);
+
+#if MULTIGEIGER_MINIMAL_WIFI
+static int wifiStateOverride = -1;
+#endif
+
+int get_effective_wifi_state(void) {
+#if MULTIGEIGER_MINIMAL_WIFI
+  if (wifiStateOverride >= 0)
+    return wifiStateOverride;
+#endif
+  return (int)iotWebConf.getState();
+}
+
+void webconf_loop_step(unsigned long ms) {
+#if MULTIGEIGER_MINIMAL_WIFI
+  unsigned long end = millis() + ms;
+  while (millis() < end) {
+    server.handleClient();
+    delay(1);
+  }
+#else
+  iotWebConf.delay(ms);
+#endif
+}
 
 unsigned long getESPchipID() {
   uint64_t espid = ESP.getEfuseMac();
@@ -113,11 +153,11 @@ char *buildSSID() {
 }
 
 void handleRoot(void) {  // Handle web requests to "/" path.
-  // -- Let IotWebConf test and handle captive portal requests.
+#if !MULTIGEIGER_MINIMAL_WIFI
   if (iotWebConf.handleCaptivePortal()) {
-    // -- Captive portal requests were already served.
     return;
   }
+#endif
   const char *index =
     "<!DOCTYPE html>"
     "<html lang='en'>"
@@ -144,12 +184,15 @@ void handleRoot(void) {  // Handle web requests to "/" path.
 static char lastWiFiSSID[IOTWEBCONF_WORD_LEN] = "";
 
 void loadConfigVariables(void) {
-  // check if WiFi SSID has changed. If so, restart cpu. Otherwise, the program will not use the new SSID
-  if ((strcmp(lastWiFiSSID, "") != 0) && (strcmp(lastWiFiSSID, iotWebConf.getWifiSsidParameter()->valueBuffer) != 0)) {
-    log(INFO, "Doing restart...");
-    ESP.restart();
+  iotwebconf::Parameter *wifiSsidParam = iotWebConf.getWifiSsidParameter();
+  if (wifiSsidParam && wifiSsidParam->valueBuffer) {
+    // check if WiFi SSID has changed. If so, restart cpu. Otherwise, the program will not use the new SSID
+    if ((strcmp(lastWiFiSSID, "") != 0) && (strcmp(lastWiFiSSID, wifiSsidParam->valueBuffer) != 0)) {
+      log(INFO, "Doing restart...");
+      ESP.restart();
+    }
+    strcpy(lastWiFiSSID, wifiSsidParam->valueBuffer);
   }
-  strcpy(lastWiFiSSID, iotWebConf.getWifiSsidParameter()->valueBuffer);
 
   speakerTick = speakerTickParam.isChecked();
   playSound = startSoundParam.isChecked();
@@ -159,6 +202,7 @@ void loadConfigVariables(void) {
   sendToMadavi = sendToMadaviParam.isChecked();
   sendToLora = sendToLoraParam.isChecked();
   sendToBle = sendToBleParam.isChecked();
+  sendToMqtt = sendToMqttParam.isChecked();
   soundLocalAlarm = soundLocalAlarmParam.isChecked();
   localAlarmThreshold = localAlarmThresholdParam.value();
   localAlarmFactor = localAlarmFactorParam.value();
@@ -167,6 +211,7 @@ void loadConfigVariables(void) {
 void configSaved(void) {
   log(INFO, "Config saved. ");
   loadConfigVariables();
+  mqtt_reconnect();
   tick_enable(true);
 }
 
@@ -193,7 +238,12 @@ void setup_webconf(bool loraHardware) {
   grpTransmission.addItem(&sendToCommunityParam);
   grpTransmission.addItem(&sendToMadaviParam);
   grpTransmission.addItem(&sendToBleParam);
+  grpTransmission.addItem(&sendToMqttParam);
   iotWebConf.addParameterGroup(&grpTransmission);
+  grpMqtt.addItem(&mqttBrokerParam);
+  grpMqtt.addItem(&mqttPortParam);
+  grpMqtt.addItem(&mqttTopicParam);
+  iotWebConf.addParameterGroup(&grpMqtt);
   if (isLoraBoard) {
     grpLoRa.addItem(&sendToLoraParam);
     grpLoRa.addItem(&deveuiParam);
@@ -210,14 +260,57 @@ void setup_webconf(bool loraHardware) {
   if (!isLoraBoard)
     sendToLora = false;
 
-  iotWebConf.init();
-
+#if MULTIGEIGER_MINIMAL_WIFI
+  // Start AP and web server without IotWebConf.init() to avoid LoadProhibited crash
+  // on Wifi_LorA-32_V2 when IotWebConf triggers WiFi state change to AP.
+  // Use 8-char password (WPA2 minimum); some devices reject others.
+  static const char apPassword[] = "12345678";
+  log(INFO, "Minimal WiFi: starting AP without IotWebConf.init()");
+  log(INFO, "AP SSID: %s  |  AP password: %s", ssid, apPassword);
+  wifiStateOverride = (int)iotwebconf::ApMode;
+  WiFi.mode(WIFI_AP);
+  if (!WiFi.softAP(ssid, apPassword)) {
+    log(ERROR, "Minimal WiFi: softAP failed");
+    wifiStateOverride = 0;  // off / not connected (IotWebConf state 0)
+  }
+  delay(500);
+  server.begin();
+  server.on("/", handleRoot);
+  server.on("/config", []() {
+    server.send(200, "text/html; charset=utf-8",
+      "<!DOCTYPE html><html><body><h1>Config</h1><p>Minimal WiFi mode: full config requires firmware without MULTIGEIGER_MINIMAL_WIFI.</p></body></html>");
+  });
+  server.onNotFound([]() {
+    server.send(404, "text/plain", "Not found");
+  });
+#else
+  // Run init() in a dedicated task with large stack to avoid stack overflow.
+  static SemaphoreHandle_t initDone = xSemaphoreCreateBinary();
+  const uint32_t WEBCONF_INIT_STACK = 16 * 1024;
+  xTaskCreate(
+    [](void *) {
+      iotWebConf.init();
+      xSemaphoreGive(initDone);
+      vTaskDelete(NULL);
+    },
+    "webconf_init",
+    WEBCONF_INIT_STACK,
+    NULL,
+    1,
+    NULL
+  );
+  if (initDone != NULL) {
+    if (xSemaphoreTake(initDone, pdMS_TO_TICKS(15000)) != pdTRUE)
+      log(WARNING, "webconf init task timed out");
+  } else {
+    iotWebConf.init();
+  }
+  delay(500);
   loadConfigVariables();
-
-  // -- Set up required URL handlers on the web server.
   server.on("/", handleRoot);
   server.on("/config", [] { iotWebConf.handleConfig(); });
   server.onNotFound([]() {
     iotWebConf.handleNotFound();
   });
+#endif
 }

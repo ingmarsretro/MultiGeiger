@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <U8x8lib.h>
 
+#include "hal/heltecv2.h"
 #include "version.h"
 #include "log.h"
 #include "userdefines.h"
@@ -11,69 +12,60 @@
 
 #define PIN_DISPLAY_ON 21
 
+// Wifi_LorA-32_V2: pin4=SDA, pin15=SCL
 #define PIN_OLED_RST 16
 #define PIN_OLED_SCL 15
 #define PIN_OLED_SDA 4
 
 U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(PIN_OLED_RST, PIN_OLED_SCL, PIN_OLED_SDA);
-U8X8_SSD1306_64X32_NONAME_HW_I2C u8x8_lora(PIN_OLED_RST, PIN_OLED_SCL, PIN_OLED_SDA);
 U8X8 *pu8x8;
 
 bool displayIsClear;
 static bool isLoraBoard;
+
+// Wifi_LorA-32_V2 has 128x64 OLED; use full size for all boards.
+#define DISPLAY_STATUS_LINE 7
 
 void display_start_screen(void) {
   char line[20];
 
   pu8x8->clear();
 
-  if (isLoraBoard) {
-    pu8x8->setFont(u8x8_font_amstrad_cpc_extended_f);
-    pu8x8->drawString(0, 2, " Multi-");
-    pu8x8->drawString(0, 3, " Geiger");
-    pu8x8->setFont(u8x8_font_victoriamedium8_r);
-    snprintf(line, 9, "%s", VERSION_STR);  // 8 chars + \0 termination
-    pu8x8->drawString(0, 4, line);
-  } else {
-    pu8x8->setFont(u8x8_font_amstrad_cpc_extended_f);
-    pu8x8->drawString(0, 0, "  Multi-Geiger");
-    pu8x8->setFont(u8x8_font_victoriamedium8_r);
-    pu8x8->drawString(0, 1, "________________");
-    pu8x8->drawString(0, 3, "Info:boehri.de");
-    snprintf(line, 15, "%s", VERSION_STR);  // 14 chars + \0 termination
-    pu8x8->drawString(0, 5, line);
-  }
+  pu8x8->setFont(u8x8_font_amstrad_cpc_extended_f);
+  pu8x8->drawString(0, 0, "  Multi-Geiger");
+  pu8x8->setFont(u8x8_font_victoriamedium8_r);
+  pu8x8->drawString(0, 1, "________________");
+  pu8x8->drawString(0, 3, "Info:boehri.de");
+  snprintf(line, 17, "%s", VERSION_STR);
+  pu8x8->drawString(0, 5, line);
   displayIsClear = false;
-};
+}
 
 void setup_display(bool loraHardware) {
   isLoraBoard = loraHardware;
+  pu8x8 = &u8x8;  // always 128x64 (Wifi_LorA-32_V2 has full-size OLED)
   if (isLoraBoard) {
-    pu8x8 = &u8x8_lora;
-//    pinMode(PIN_DISPLAY_ON, INPUT);
-//    digitalWrite(PIN_DISPLAY_ON, LOW);
     pinMode(Vext, OUTPUT);
     digitalWrite(Vext, LOW);
-  } else {
-    pu8x8 = &u8x8;
   }
   pu8x8->begin();
   display_start_screen();
+  // Show measurement screen (0 nSv/h) so digits are visible; publish() will refresh later.
+  display_GMC(0, 0, 0, true);
 }
 
 void clear_displayline(int line) {
-  const char *blanks;
-  blanks = isLoraBoard ? "        " : "                ";  // 8 / 16
-  pu8x8->drawString(0, line, blanks);
+  if (!pu8x8)
+    return;
+  pu8x8->drawString(0, line, "                ");  // 16 chars
 }
 
 void display_statusline(String txt) {
-  if (txt.length() == 0)
+  if (txt.length() == 0 || !pu8x8)
     return;
-  int line = isLoraBoard ? 5 : 7;
   pu8x8->setFont(u8x8_font_victoriamedium8_r);
-  clear_displayline(line);
-  pu8x8->drawString(0, line, txt.c_str());
+  clear_displayline(DISPLAY_STATUS_LINE);
+  pu8x8->drawString(0, DISPLAY_STATUS_LINE, txt.c_str());
 }
 
 static int status[STATUS_MAX] = {ST_NODISPLAY, ST_NODISPLAY, ST_NODISPLAY, ST_NODISPLAY,
@@ -122,12 +114,12 @@ char get_status_char(int index) {
 }
 
 void display_status(void) {
-  char output[17];  // max. 16 chars wide display + \0 terminator
-  const char *format = isLoraBoard ? "%c%c%c%c%c%c%c%c" : "%c %c %c %c %c %c %c %c";  // 8 or 16 chars wide
-  snprintf(output, 17, format,
+  if (!pu8x8)
+    return;
+  char output[17];
+  snprintf(output, 17, "%c %c %c %c %c %c %c %c",
            get_status_char(0), get_status_char(1), get_status_char(2), get_status_char(3),
-           get_status_char(4), get_status_char(5), get_status_char(6), get_status_char(7)
-          );
+           get_status_char(4), get_status_char(5), get_status_char(6), get_status_char(7));
   display_statusline(output);
 }
 
@@ -151,33 +143,20 @@ char *format_time(unsigned int secs) {
 
 void display_GMC(unsigned int TimeSec, int RadNSvph, int CPM, bool use_display) {
   if (!use_display) {
-    if (!displayIsClear) {
-      pu8x8->clear();
-      clear_displayline(4);
-      clear_displayline(5);
-      displayIsClear = true;
-    }
+    // Do not clear: leaving last content avoids "only status line" (A ? . . . . 7) visible after display off.
     return;
   }
 
   pu8x8->clear();
-
   char output[40];
-  if (!isLoraBoard) {
-    pu8x8->setFont(u8x8_font_7x14_1x2_f);
-    sprintf(output, "%3s%7d nSv/h", format_time(TimeSec), RadNSvph);
-    pu8x8->drawString(0, 0, output);
-    pu8x8->setFont(u8x8_font_inb33_3x6_n);
-    sprintf(output, "%5d", CPM);
-    pu8x8->drawString(0, 2, output);
-  } else {
-    pu8x8->setFont(u8x8_font_amstrad_cpc_extended_f);
-    sprintf(output, " %7d", RadNSvph);
-    pu8x8->drawString(0, 2, output);
-    pu8x8->setFont(u8x8_font_px437wyse700b_2x2_f);
-    sprintf(output, "%4d", CPM);
-    pu8x8->drawString(0, 3, output);
-  }
+
+  pu8x8->setFont(u8x8_font_7x14_1x2_f);
+  sprintf(output, "%3s%7d nSv/h", format_time(TimeSec), RadNSvph);
+  pu8x8->drawString(0, 0, output);
+  pu8x8->setFont(u8x8_font_inb33_3x6_n);
+  sprintf(output, "%5d", CPM);
+  pu8x8->drawString(0, 2, output);
+
   display_status();
   displayIsClear = false;
-};
+}

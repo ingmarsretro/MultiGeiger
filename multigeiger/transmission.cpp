@@ -13,6 +13,8 @@
 #include "loraWan.h"
 
 #include "transmission.h"
+#include "mqtt.h"
+#include "version.h"
 
 #include "ca_certs.h"
 
@@ -75,13 +77,9 @@ void setup_transmission(const char *version, char *ssid, bool loraHardware) {
 }
 
 void poll_transmission() {
-  if (isLoraBoard) {
-    // The LMIC needs to be polled a lot; and this is very low cost if the LMIC isn't
-    // active. So we just act as a bridge. We need this routine so we can see
-    // `isLoraBoard`. Most C compilers will notice the tail call and optimize this
-    // to a jump.
+  if (isLoraBoard)
     poll_lorawan();
-  }
+  mqtt_loop();
 }
 
 void prepare_http(HttpsClient *client, const char *host) {
@@ -245,7 +243,8 @@ int send_ttn_thp(float temperature, float humidity, float pressure) {
 }
 
 void transmit_data(String tube_type, int tube_nbr, unsigned int dt, unsigned int hv_pulses, unsigned int gm_counts, unsigned int cpm,
-                   int have_thp, float temperature, float humidity, float pressure, int wifi_status) {
+                   int have_thp, float temperature, float humidity, float pressure, int wifi_status,
+                   float dose_rate_usv_h, float accumulated_dose_rate_usv_h) {
   int rc1, rc2;
 
   #if SEND2CUSTOMSRV
@@ -295,6 +294,11 @@ void transmit_data(String tube_type, int tube_nbr, unsigned int dt, unsigned int
     ttn_ok = (rc1 == TX_STATUS_UPLINK_SUCCESS) && (rc2 == TX_STATUS_UPLINK_SUCCESS);
     set_status(STATUS_TTN, ttn_ok ? ST_TTN_IDLE : ST_TTN_ERROR);
     display_status();
+  }
+
+  if (sendToMqtt && (wifi_status == ST_WIFI_CONNECTED)) {
+    log(INFO, "Sending to MQTT ...");
+    mqtt_publish_geiger(dose_rate_usv_h, cpm, accumulated_dose_rate_usv_h, VERSION_STR);
   }
 }
 

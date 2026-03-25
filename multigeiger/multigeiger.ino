@@ -35,9 +35,14 @@
 // slow down the arduino main loop so it spins about once per LOOP_DURATION -
 #define LOOP_DURATION 1000
 
-// DIP switches
+// DIP switches: re-read in loop. SW0=speaker, SW1=display, SW2=LED, SW3=BLE (closed to GND = on).
 static Switches switches;
+static bool effective_display_on;  // showDisplay && switches.display_on
 
+// Increase loop/setup task stack to avoid LoadProhibited when WiFi enters AP mode (IotWebConf)
+#if defined(ARDUINO_ARCH_ESP32) && defined(SET_LOOP_TASK_STACK_SIZE)
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+#endif
 
 void setup() {
   bool isLoraBoard = init_hwtest();
@@ -60,7 +65,7 @@ void setup_ntp(int wifi_status) {
   if (clock_configured)
     return;
 
-  // this is called from loop() because we do not want to block in setup().
+  // this is called from loop()
   // it might either take a while until WiFi is ready or it might even never
   // be ready, e.g. in LoRa-based deployments or on the road using BLE.
 
@@ -71,22 +76,22 @@ void setup_ntp(int wifi_status) {
 
   setup_clock(0);  // 0 == do NTP!
   // please note that time is not necessarily NTP-correct below here.
-  // it might take some minutes until we have the correct time.
-  // if we do not have a connection to NTP servers, it will just count up from 1970.
+  // it might take some minutes until time is correct
+  // if there is no connection to NTP servers, it will just count up from 1970.
 
   clock_configured = true;
 }
 
 int update_wifi_status(void) {
   int st;
-  switch (iotWebConf.getState()) {
-  case iotwebconf::Connecting:
+  switch (get_effective_wifi_state()) {
+  case (int)iotwebconf::Connecting:
     st = ST_WIFI_CONNECTING;
     break;
-  case iotwebconf::OnLine:
+  case (int)iotwebconf::OnLine:
     st = ST_WIFI_CONNECTED;
     break;
-  case iotwebconf::ApMode:
+  case (int)iotwebconf::ApMode:
     st = ST_WIFI_AP;
     break;
   default:
@@ -117,13 +122,16 @@ void publish(unsigned long current_ms, unsigned long current_counts, unsigned lo
   static unsigned long accumulated_time = 0;
   static float accumulated_Count_Rate = 0.0, accumulated_Dose_Rate = 0.0;
 
-  if (((current_counts - last_counts) >= MINCOUNTS) || ((current_ms - last_timestamp) >= DISPLAYREFRESH)) {
+  // Update display: 100+ new counts, or 10 s elapsed, or any new count and 1 s since last update (so manual pull/low is visible).
+  if (((current_counts - last_counts) >= MINCOUNTS) || ((current_ms - last_timestamp) >= DISPLAYREFRESH) ||
+      ((current_counts > last_counts) && ((current_ms - last_timestamp) >= 1000))) {
+    last_timestamp = current_ms;
     if ((gm_count_timestamp == 0) && (last_count_timestamp == 0)) {
-      // seems like there was no GM pulse yet and everything is still in initial state.
-      // get out of here, we can't do anything useful now.
+      // No GM pulse yet: still show 0 nSv/h and 0 CPM so the measurement screen is visible
+      update_bledata(0);
+      display_GMC(0, 0, 0, effective_display_on);
       return;
     }
-    last_timestamp = current_ms;
     int hv_pulses = current_hv_pulses - last_hv_pulses;
     last_hv_pulses = current_hv_pulses;
     int counts = current_counts - last_counts;
@@ -147,7 +155,7 @@ void publish(unsigned long current_ms, unsigned long current_counts, unsigned lo
     // ... and update the data on display, notify via BLE
     update_bledata((unsigned int)(Count_Rate * 60));
     display_GMC((unsigned int)(accumulated_time / 1000), (int)(accumulated_Dose_Rate * 1000), (int)(Count_Rate * 60),
-                (showDisplay && switches.display_on));
+                effective_display_on);
 
     // Sound local alarm?
     if (soundLocalAlarm && GMC_factor_uSvph > 0) {
@@ -172,7 +180,7 @@ void publish(unsigned long current_ms, unsigned long current_counts, unsigned lo
     if (afterStartTime && ((current_ms - boot_timestamp) >= afterStartTime)) {
       afterStartTime = 0;
       update_bledata(0);
-      display_GMC(0, 0, 0, (showDisplay && switches.display_on));
+      display_GMC(0, 0, 0, effective_display_on);
     }
   }
 }
@@ -220,8 +228,8 @@ void transmit(unsigned long current_ms, unsigned long current_counts, unsigned l
   static unsigned long last_count_timestamp = 0;
   if ((current_ms - last_timestamp) >= (MEASUREMENT_INTERVAL * 1000)) {
     if ((gm_count_timestamp == 0) && (last_count_timestamp == 0)) {
-      // seems like there was no GM pulse yet and everything is still in initial state.
-      // get out of here, we can't do anything useful now.
+      // if there is no GM pulse yet and everything is still in initial state.
+      // get out...
       return;
     }
     last_timestamp = current_ms;
@@ -237,12 +245,19 @@ void transmit(unsigned long current_ms, unsigned long current_counts, unsigned l
 
     log(DEBUG, "Measured GM: cpm= %d HV=%d", current_cpm, hv_pulses);
 
+    float factor = tubes[TUBE_TYPE].cps_to_uSvph;
+    float dose_rate_usv_h = (current_cpm / 60.0f) * factor;
+    float accumulated_dose_rate_usv_h = (current_ms > 0 && current_counts > 0)
+      ? ((float)current_counts * 1000.0f / (float)current_ms) * factor : 0.0f;
+
     transmit_data(tubes[TUBE_TYPE].type, tubes[TUBE_TYPE].nbr, dt, hv_pulses, counts, current_cpm,
-                  have_thp, temperature, humidity, pressure, wifi_status);
+                  have_thp, temperature, humidity, pressure, wifi_status,
+                  dose_rate_usv_h, accumulated_dose_rate_usv_h);
   }
 }
 
 void loop() {
+
   static bool hv_error = false;  // true means a HV capacitor charging issue
 
   static bool have_thp = false;
@@ -268,6 +283,10 @@ void loop() {
 
   // time between last 2 geiger mueller events [us]
   unsigned int gm_count_time_between;
+
+  switches = read_switches();
+  effective_display_on = (showDisplay && switches.display_on);   // SW1 = display
+  apply_switches_tick(switches.speaker_on, switches.led_on, speakerTick, ledTick);  // SW0 = speaker, SW2 = LED
 
   read_GMC(&gm_counts, &gm_count_timestamp, &gm_count_time_between);
 
@@ -296,5 +315,5 @@ void loop() {
 
   long loop_duration;
   loop_duration = millis() - current_ms;
-  iotWebConf.delay((loop_duration < LOOP_DURATION) ? (LOOP_DURATION - loop_duration) : 0);
+  webconf_loop_step((loop_duration < LOOP_DURATION) ? (LOOP_DURATION - loop_duration) : 0);
 }
