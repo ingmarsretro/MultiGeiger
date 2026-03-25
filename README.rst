@@ -1,6 +1,7 @@
 # MultiGeiger (ESP32 WiFi LoRa 32 V2 firmware)
 
-![MultiGeiger Mainboard for WiFi LorRa 32 V2](https://github.com/ingmarsretro/MultiGeiger/blob/master/docs/Bilder/WiFi_Lora32_V2.jpg)
+.. image:: docs/Bilder/WiFi_Lora32_V2.jpg
+   :alt: MultiGeiger Mainboard for WiFi LorRa 32 V2
 
 This repository contains a **MultiGeiger** firmware build targeting the **Heltec WiFi LoRa 32 V2** (ESP32 + OLED + LoRa) and a matching hardware pinout. MultiGeiger is a **radioactivity measurement device** (Geiger‑Müller tube + HV supply) that can display measurements locally and publish them to community services.
 
