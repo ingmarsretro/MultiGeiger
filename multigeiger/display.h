@@ -4,6 +4,9 @@
 #define _DISPLAY_H_
 
 void setup_display(bool loraHardware);
+void display_set_visible(bool visible);
+bool display_is_visible(void);
+
 void display_GMC(unsigned int TimeSec, int RadNSvph, int CPM, bool use_display);
 void clear_displayline(int line);
 void display_statusline(String txt);

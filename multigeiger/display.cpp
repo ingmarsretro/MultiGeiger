@@ -10,8 +10,6 @@
 
 #include "display.h"
 
-#define PIN_DISPLAY_ON 21
-
 // Wifi_LorA-32_V2: pin4=SDA, pin15=SCL
 #define PIN_OLED_RST 16
 #define PIN_OLED_SCL 15
@@ -22,6 +20,8 @@ U8X8 *pu8x8;
 
 bool displayIsClear;
 static bool isLoraBoard;
+
+static bool g_display_visible = true;
 
 // Wifi_LorA-32_V2 has 128x64 OLED; use full size for all boards.
 #define DISPLAY_STATUS_LINE 7
@@ -48,20 +48,65 @@ void setup_display(bool loraHardware) {
     pinMode(Vext, OUTPUT);
     digitalWrite(Vext, LOW);
   }
+  g_display_visible = true;
   pu8x8->begin();
   display_start_screen();
   // Show measurement screen (0 nSv/h) so digits are visible; publish() will refresh later.
   display_GMC(0, 0, 0, true);
 }
 
-void clear_displayline(int line) {
+void display_set_visible(bool visible) {
+  static bool have_synced = false;
+  static bool last = true;
+
+  if (have_synced && visible == last)
+    return;
+
+  if (!have_synced && visible) {
+    have_synced = true;
+    last = true;
+    g_display_visible = true;
+    return;
+  }
+
+  have_synced = true;
+  last = visible;
+  g_display_visible = visible;
+
   if (!pu8x8)
+    return;
+
+  if (!visible) {
+    pu8x8->clear();
+    pu8x8->setPowerSave(1);
+    if (isLoraBoard) {
+      pinMode(Vext, OUTPUT);
+      digitalWrite(Vext, HIGH);
+    }
+    return;
+  }
+
+  if (isLoraBoard) {
+    pinMode(Vext, OUTPUT);
+    digitalWrite(Vext, LOW);
+    delay(20);
+  }
+  pu8x8->setPowerSave(0);
+  pu8x8->initDisplay();
+}
+
+bool display_is_visible(void) {
+  return g_display_visible;
+}
+
+void clear_displayline(int line) {
+  if (!pu8x8 || !g_display_visible)
     return;
   pu8x8->drawString(0, line, "                ");  // 16 chars
 }
 
 void display_statusline(String txt) {
-  if (txt.length() == 0 || !pu8x8)
+  if (txt.length() == 0 || !pu8x8 || !g_display_visible)
     return;
   pu8x8->setFont(u8x8_font_victoriamedium8_r);
   clear_displayline(DISPLAY_STATUS_LINE);
@@ -114,7 +159,7 @@ char get_status_char(int index) {
 }
 
 void display_status(void) {
-  if (!pu8x8)
+  if (!pu8x8 || !g_display_visible)
     return;
   char output[17];
   snprintf(output, 17, "%c %c %c %c %c %c %c %c",
@@ -142,10 +187,8 @@ char *format_time(unsigned int secs) {
 }
 
 void display_GMC(unsigned int TimeSec, int RadNSvph, int CPM, bool use_display) {
-  if (!use_display) {
-    // Do not clear: leaving last content avoids "only status line" (A ? . . . . 7) visible after display off.
+  if (!use_display || !g_display_visible)
     return;
-  }
 
   pu8x8->clear();
   char output[40];
