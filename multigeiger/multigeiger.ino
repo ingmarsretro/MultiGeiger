@@ -35,7 +35,7 @@
 // slow down the arduino main loop so it spins about once per LOOP_DURATION -
 #define LOOP_DURATION 1000
 
-// DIP switches: re-read in loop. SW0=speaker, SW1=display, SW2=LED, SW3=BLE (closed to GND = on).
+// DIP switches: re-read in loop. SW0=speaker tick, SW1=display, SW2=unused, SW3=BLE (closed to GND = on).
 static Switches switches;
 static bool effective_display_on;  // showDisplay && switches.display_on
 
@@ -49,10 +49,12 @@ void setup() {
   setup_log(DEFAULT_LOG_LEVEL);
   setup_display(isLoraBoard);
   setup_switches(isLoraBoard);
-  switches = read_switches();  // only read DIP switches once at boot time
+  switches = read_switches();  // initial DIP read (webconf loads saved flags next)
   setup_thp_sensor();
   setup_webconf(isLoraBoard);
-  setup_speaker(playSound, ledTick && switches.led_on, speakerTick && switches.speaker_on);
+  switches = read_switches();  // refresh after config load
+  display_set_visible(showDisplay && switches.display_on);
+  setup_speaker(playSound, speakerTick && switches.speaker_on);
   setup_transmission(VERSION_STR, ssid, isLoraBoard);
   setup_ble(ssid, sendToBle && switches.ble_on);
   setup_log_data(SERIAL_DEBUG);
@@ -286,7 +288,8 @@ void loop() {
 
   switches = read_switches();
   effective_display_on = (showDisplay && switches.display_on);   // SW1 = display
-  apply_switches_tick(switches.speaker_on, switches.led_on, speakerTick, ledTick);  // SW0 = speaker, SW2 = LED
+  apply_switches_tick(switches.speaker_on, speakerTick);  // SW0 = speaker tick enable
+  display_set_visible(effective_display_on);
 
   read_GMC(&gm_counts, &gm_count_timestamp, &gm_count_time_between);
 
