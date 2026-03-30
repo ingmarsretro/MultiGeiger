@@ -32,9 +32,6 @@
 // Speaker Ticks with every pulse?
 #define SPEAKER_TICK true
 
-// White LED on uC board flashing with every pulse?
-#define LED_TICK true
-
 // Enable display?
 #define SHOW_DISPLAY true
 
