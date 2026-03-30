@@ -27,7 +27,7 @@ void setup_switches(bool isLoraBoard) {
   pinMode(PIN_SWI_3, INPUT);
 
   Switches s = read_switches();
-  log(DEBUG, "Switches: SW0 speaker_on %d,  SW1 display_on %d,  SW2 led_on: %d,  SW3 ble_on: %d",
+  log(DEBUG, "Switches: SW0 speaker_on %d,  SW1 display_on %d,  SW2 (unused) %d,  SW3 ble_on: %d",
       s.speaker_on, s.display_on, s.led_on, s.ble_on);
 }
 
