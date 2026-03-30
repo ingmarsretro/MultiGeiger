@@ -8,7 +8,6 @@
 
 extern bool speakerTick;
 extern bool playSound;
-extern bool ledTick;
 extern bool showDisplay;
 extern bool sendToCommunity;
 extern bool sendToMadavi;

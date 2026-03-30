@@ -18,7 +18,6 @@
 
 bool speakerTick = SPEAKER_TICK;
 bool playSound = PLAY_SOUND;
-bool ledTick = LED_TICK;
 bool showDisplay = SHOW_DISPLAY;
 bool sendToCommunity = SEND2SENSORCOMMUNITY;
 bool sendToMadavi = SEND2MADAVI;
@@ -29,7 +28,6 @@ bool soundLocalAlarm = LOCAL_ALARM_SOUND;
 
 char speakerTick_c[CHECKBOX_LEN];
 char playSound_c[CHECKBOX_LEN];
-char ledTick_c[CHECKBOX_LEN];
 char showDisplay_c[CHECKBOX_LEN];
 char sendToCommunity_c[CHECKBOX_LEN];
 char sendToMadavi_c[CHECKBOX_LEN];
@@ -53,7 +51,6 @@ int localAlarmFactor = (int)LOCAL_ALARM_FACTOR;
 iotwebconf::ParameterGroup grpMisc = iotwebconf::ParameterGroup("misc", "Misc. Settings");
 iotwebconf::CheckboxParameter startSoundParam = iotwebconf::CheckboxParameter("Start sound", "startSound", playSound_c, CHECKBOX_LEN, playSound);
 iotwebconf::CheckboxParameter speakerTickParam = iotwebconf::CheckboxParameter("Speaker tick", "speakerTick", speakerTick_c, CHECKBOX_LEN, speakerTick);
-iotwebconf::CheckboxParameter ledTickParam = iotwebconf::CheckboxParameter("LED tick", "ledTick", ledTick_c, CHECKBOX_LEN, ledTick);
 iotwebconf::CheckboxParameter showDisplayParam = iotwebconf::CheckboxParameter("Show display", "showDisplay", showDisplay_c, CHECKBOX_LEN, showDisplay);
 
 iotwebconf::ParameterGroup grpTransmission = iotwebconf::ParameterGroup("transmission", "Transmission Settings");
@@ -91,7 +88,7 @@ iotwebconf::IntTParameter<int16_t> localAlarmFactorParam =
 // Appending new variables does not require a new version number here.
 // If this value is changed, ALL configuration variables must be re-entered,
 // including the WiFi credentials.
-#define CONFIG_VERSION "016"
+#define CONFIG_VERSION "017"
 
 DNSServer dnsServer;
 WebServer server(80);
@@ -196,7 +193,6 @@ void loadConfigVariables(void) {
 
   speakerTick = speakerTickParam.isChecked();
   playSound = startSoundParam.isChecked();
-  ledTick = ledTickParam.isChecked();
   showDisplay = showDisplayParam.isChecked();
   sendToCommunity = sendToCommunityParam.isChecked();
   sendToMadavi = sendToMadaviParam.isChecked();
@@ -232,7 +228,6 @@ void setup_webconf(bool loraHardware) {
   // add the setting parameter
   grpMisc.addItem(&startSoundParam);
   grpMisc.addItem(&speakerTickParam);
-  grpMisc.addItem(&ledTickParam);
   grpMisc.addItem(&showDisplayParam);
   iotWebConf.addParameterGroup(&grpMisc);
   grpTransmission.addItem(&sendToCommunityParam);
