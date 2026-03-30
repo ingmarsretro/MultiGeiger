@@ -1,5 +1,4 @@
 // speaker / sound related code
-// also handles the onboard LED, which lights up while speaker ticks.
 
 #include <Arduino.h>
 #include <driver/mcpwm.h>
@@ -18,9 +17,9 @@
 #define PIN_SPEAKER_OUTPUT_P 0
 #define PIN_SPEAKER_OUTPUT_N 13
 
-// shall the speaker / LED "tick"?
-static volatile bool speaker_tick, led_tick;  // current state
-static bool speaker_tick_wanted, led_tick_wanted;  // state wanted by user
+// shall the speaker "tick"?
+static volatile bool speaker_tick;  // current state
+static bool speaker_tick_wanted;  // state wanted by user
 
 // MUX (mutexes used for mutual exclusive access to isr variables)
 portMUX_TYPE mux_audio = portMUX_INITIALIZER_UNLOCKED;
@@ -30,6 +29,15 @@ volatile int *isr_tick_sequence = NULL;
 volatile int *isr_sequence = NULL;  // currently played sequence
 
 static int tick_sequence[8];
+// Short rising three-tone chime at boot when "Start sound" is enabled (freq_mHz, volume, led, ms)
+static int startup_sound_sequence[] = {
+  1600000, 1, -1, 90,
+  0, 0, -1, 40,
+  2200000, 1, -1, 90,
+  0, 0, -1, 40,
+  3000000, 1, -1, 120,
+  0, 0, -1, 0
+};
 static int alarm_sequence[12] = {
   // "high_Pitch"
   3000000, 1, -1, 400,  // frequency_mHz, volume, LED (-1 = don't touch), duration_ms
@@ -107,7 +115,7 @@ static void audio_sequencer_step(void) {
     }
     mcpwm_set_frequency(MCPWM_UNIT_0, MCPWM_TIMER_0, frequency_mHz / 1000);
     mcpwm_start(MCPWM_UNIT_0, MCPWM_TIMER_0);
-  } else if (frequency_mHz == 0) {
+  } else {
     mcpwm_stop(MCPWM_UNIT_0, MCPWM_TIMER_0);
     mcpwm_set_signal_low(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
     mcpwm_set_signal_low(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B);
@@ -192,7 +200,7 @@ void IRAM_ATTR isr_audio() {
     }
     mcpwm_set_frequency(MCPWM_UNIT_0, MCPWM_TIMER_0, frequency_mHz / 1000);
     mcpwm_start(MCPWM_UNIT_0, MCPWM_TIMER_0);
-  } else if (frequency_mHz == 0) {
+  } else {
     mcpwm_stop(MCPWM_UNIT_0, MCPWM_TIMER_0);
     mcpwm_set_signal_low(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
     mcpwm_set_signal_low(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B);
@@ -220,26 +228,22 @@ void IRAM_ATTR isr_audio() {
 #endif
 
 void IRAM_ATTR tick(bool high) {
-  // high true: "tick" -> high frequency tick and LED blink
-  // high false: "tock" -> lower frequency tock, no LED
+  // high true: "tick" -> high frequency tick
+  // high false: "tock" -> lower frequency tock
   // called from ISR!
   portENTER_CRITICAL_ISR(&mux_audio);
 
   int *sequence;
 
-  // we expect speaker_tick or led_tick to change at any time,
-  // thus check it here and generate different sequences:
-  if (speaker_tick || led_tick) {
+  if (speaker_tick) {
     sequence = tick_sequence;
-    // "on"
-    sequence[0] = speaker_tick ? (high ? 5000000 : 1000000) : -1;  // frequency_mHz
+    sequence[0] = high ? 5000000 : 1000000;  // frequency_mHz
     sequence[1] = 1;  // volume
-    sequence[2] = led_tick ? (high ? 1 : -1) : -1;  // LED
+    sequence[2] = -1;  // LED (unused)
     sequence[3] = 4;  // duration_ms
-    // "off"
-    sequence[4] = speaker_tick ? 0 : -1;
+    sequence[4] = 0;
     sequence[5] = 0;
-    sequence[6] = led_tick ? (high ? 0 : -1) : -1;
+    sequence[6] = -1;
     sequence[7] = 0;  // END
   } else
     sequence = NULL;
@@ -252,17 +256,14 @@ void tick_enable(bool enable) {
   // true -> bring ticking into the state desired by user
   // false -> disable ticking (e.g. when accessing flash)
   if (enable) {
-    led_tick = led_tick_wanted;
     speaker_tick = speaker_tick_wanted;
   } else {
-    led_tick = false;
     speaker_tick = false;
   }
 }
 
-void apply_switches_tick(bool speaker_sw, bool led_sw, bool want_speaker_tick, bool want_led_tick) {
+void apply_switches_tick(bool speaker_sw, bool want_speaker_tick) {
   speaker_tick_wanted = want_speaker_tick && speaker_sw;
-  led_tick_wanted = want_led_tick && led_sw;
   tick_enable(true);
 }
 
@@ -282,9 +283,11 @@ void play(int *sequence) {
 
 #define TONE(f, v, led, t) {int(f * 0.75), v, led, int(t * 85)}
 
-void setup_speaker(bool playSound, bool _led_tick, bool _speaker_tick) {
-  if (HAS_LED != NOT_A_PIN)
+void setup_speaker(bool playSound, bool _speaker_tick) {
+  if (HAS_LED != NOT_A_PIN) {
     pinMode(HAS_LED, OUTPUT);
+    digitalWrite(HAS_LED, LOW);
+  }
 
   mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, PIN_SPEAKER_OUTPUT_P);
   mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0B, PIN_SPEAKER_OUTPUT_N);
@@ -310,14 +313,14 @@ void setup_speaker(bool playSound, bool _led_tick, bool _speaker_tick) {
 
   tick_enable(false);  // no ticking until we set wanted state below
 
-  // Startup melody disabled; tick sound on each pulse is enabled below.
-
-  led_tick_wanted = _led_tick;
   speaker_tick_wanted = _speaker_tick;
   tick_enable(true);
 
-  // Force speaker silent: 0 V across speaker (both pins LOW). Was A=H B=L = DC across piezo = tone.
+  // Idle output: 0 V across speaker (both pins LOW). Was A=H B=L = DC across piezo = tone.
   mcpwm_stop(MCPWM_UNIT_0, MCPWM_TIMER_0);
   mcpwm_set_signal_low(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
   mcpwm_set_signal_low(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B);
+
+  if (playSound)
+    play(startup_sound_sequence);
 }
